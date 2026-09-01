@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import ThreeVehicleViewer from './components/ThreeVehicleViewer';
+import Header from './components/Header';
+import Sidebar from './components/Sidebar';
+import MapViewHUD from './components/MapViewHUD';
 import LeafletMapView from './components/LeafletMapView';
+import ThreeVehicleViewer from './components/ThreeVehicleViewer';
 import TelemetryPanel from './components/TelemetryPanel';
 import ControlPanel from './components/ControlPanel';
 import EventConsole from './components/EventConsole';
@@ -8,24 +11,37 @@ import EvaluationPanel from './components/EvaluationPanel';
 import ModelComparisonCard from './components/ModelComparisonCard';
 import IMUKalmanHUD from './components/IMUKalmanHUD';
 import AnomalyBanner from './components/AnomalyBanner';
-import TopStatusBar from './components/TopStatusBar';
 import SystemHealthPanel from './components/SystemHealthPanel';
 import FusionBreakdownCard from './components/FusionBreakdownCard';
 import TrajectoryTable from './components/TrajectoryTable';
 import AdversarialBanner from './components/AdversarialBanner';
+
+// Secondary Navigation Views
+import TrajectoryAnalysisView from './components/views/TrajectoryAnalysisView';
+import GNSSAnomalyControlView from './components/views/GNSSAnomalyControlView';
+import AIExplainabilityView from './components/views/AIExplainabilityView';
+import ModelPerformanceView from './components/views/ModelPerformanceView';
+import EvaluationView from './components/views/EvaluationView';
+import SystemLogsView from './components/views/SystemLogsView';
+
 import './App.css';
 
 const BACKEND_URL = 'http://127.0.0.1:8080';
 
 export default function App() {
+  // Navigation & UI States
+  const [activeTab, setActiveTab] = useState('live_simulation');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [simSpeed, setSimSpeed] = useState(1);
+
+  // Simulation & Model Data States
   const [highwayCoords, setHighwayCoords] = useState([]);
   const [serviceCoords, setServiceCoords] = useState([]);
   const [points, setPoints] = useState([]);
   const [classifications, setClassifications] = useState([]);
   const [accuracySummary, setAccuracySummary] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  
-  // Feature 1: Simulation Lifecycle state ('IDLE' | 'RUNNING' | 'PAUSED' | 'STOPPED' | 'COMPLETED')
   const [simStatus, setSimStatus] = useState('IDLE');
   
   const [tier, setTier] = useState('hard');
@@ -39,10 +55,10 @@ export default function App() {
 
   const addEvent = useCallback((type, message) => {
     const timeStr = new Date().toLocaleTimeString();
-    setEvents(prev => [...prev.slice(-35), { time: timeStr, type, message }]);
+    setEvents(prev => [...prev.slice(-45), { time: timeStr, type, message }]);
   }, []);
 
-  // Local synthetic generator supporting all 7 demo scenarios & calculations
+  // Local synthetic fallback data generator
   const generateLocalData = useCallback((selectedTier, selectedChoice) => {
     const num_points = 100;
     const base_lat = 13.0827;
@@ -266,9 +282,10 @@ export default function App() {
     loadTrajectory('hard', 'switch');
   }, [fetchRoads, loadTrajectory]);
 
-  // Feature 1: Simulation Lifecycle Timer Loop
+  // Simulation Lifecycle Timer Loop with Speed Multiplier Support
   useEffect(() => {
     if (simStatus === 'RUNNING') {
+      const intervalMs = Math.max(50, Math.floor(250 / simSpeed));
       timerRef.current = setInterval(() => {
         setCurrentIndex(prev => {
           if (prev >= points.length - 1) {
@@ -284,7 +301,6 @@ export default function App() {
             addEvent('OUTAGE', `⚠ LOW MAP-MATCH CONFIDENCE: ${confPct}% < ${confidenceThreshold}% threshold! Position verification recommended.`);
           }
 
-          // Extended 15-step Judge Demo events
           if (nextIdx === 10) addEvent('GPS', '1. Clean GNSS fix received — jitter < 2.5m.');
           else if (nextIdx === 20) addEvent('NOISE', '2. GNSS noise level increasing (12m jitter).');
           else if (nextIdx === 25) {
@@ -302,12 +318,12 @@ export default function App() {
 
           return nextIdx;
         });
-      }, 250);
+      }, intervalMs);
     } else if (timerRef.current) clearInterval(timerRef.current);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [simStatus, points, classifications, confidenceThreshold, addEvent]);
+  }, [simStatus, points, classifications, confidenceThreshold, simSpeed, addEvent]);
 
-  // Feature 1: Lifecycle Handlers (NO REMOUNT, NO SCROLL)
+  // Lifecycle Control Handlers
   const handleStartSimulation = () => {
     setCurrentIndex(0);
     setSimStatus('RUNNING');
@@ -352,7 +368,6 @@ export default function App() {
     addEvent('DEMO', `Switched Route: ${newChoice.toUpperCase()}`);
   };
 
-  // Extended 15-Step Judge Demo
   const handleStartJudgeDemo = async () => {
     setSimStatus('IDLE');
     setTier('hard');
@@ -397,169 +412,226 @@ export default function App() {
 
   const currentPoint = points[currentIndex];
   const currentClassification = classifications[currentIndex];
-  const confPct = Math.round((currentClassification?.confidence || 0.95) * 100);
-  const isLowConfidence = confPct < confidenceThreshold;
 
   return (
     <div style={{
-      minHeight: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100vh',
+      width: '100vw',
+      overflow: 'hidden',
       background: '#060913',
       color: '#f8fafc',
-      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-      padding: '20px 28px',
-      boxSizing: 'border-box'
+      fontFamily: 'Inter, system-ui, -apple-system, sans-serif'
     }}>
-      {/* Feature 15: Top Judge Status Bar */}
-      <TopStatusBar
-        classifiedRoad={currentClassification?.classified_road}
-        confidence={currentClassification?.confidence}
-        isOutage={currentClassification?.is_outage}
+      {/* Command Center Top Header */}
+      <Header
         simStatus={simStatus}
         backendConnected={backendConnected}
+        isOutage={currentClassification?.is_outage}
+        demoMode={demoMode}
+        onToggleDemoMode={() => setDemoMode(d => !d)}
       />
 
-      {/* Feature 13: Combined Adversarial Callout Banner */}
-      <AdversarialBanner
-        tier={tier}
-        classification={currentClassification}
-      />
-
-      {/* Feature 3: GNSS Anomaly & Spoofing Banner */}
-      <div style={{ marginBottom: '16px' }}>
-        <AnomalyBanner
-          anomalyDetection={currentClassification?.anomaly_detection}
-          currentPoint={currentPoint}
+      {/* Main Body Split: Left Sidebar + Center Workspace */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Left Sidebar */}
+        <Sidebar
+          activeTab={activeTab}
+          onChangeTab={setActiveTab}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed(c => !c)}
         />
-      </div>
 
-      {/* Main Command Center Dashboard Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(420px, 1fr) 1fr', gap: '20px', maxWidth: '1600px', margin: '0 auto' }}>
-        
-        {/* Left Column: Visualizations & Controls */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Center Workspace */}
+        <main style={{ flex: 1, padding: '20px 24px', overflowY: 'auto', boxSizing: 'border-box' }}>
           
-          {/* Feature 11: Stable 3D/2D Viewport Container (~420px, NO AUTO SCROLL) */}
-          <div style={{ background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', padding: '16px', borderRadius: '12px', border: '1px solid #1e293b' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <span style={{ fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>
-                MAIN GEOSPATIAL VISUALIZATION CENTER
-              </span>
-              <div style={{ fontSize: '11px', color: '#38bdf8' }}>
-                {viewMode === '2d' ? '2D Leaflet Map' : (viewMode === '3d' ? '3D Three.js Autonomous Vehicle View' : 'Split Screen View')}
-              </div>
-            </div>
-
-            <div style={{ height: '420px', width: '100%', position: 'relative' }}>
-              {viewMode === '2d' && (
-                <LeafletMapView
-                  highwayCoords={highwayCoords}
-                  serviceCoords={serviceCoords}
-                  points={points}
-                  currentIndex={currentIndex}
-                  classifications={classifications}
-                />
-              )}
-
-              {viewMode === '3d' && (
-                <ThreeVehicleViewer
-                  currentPoint={currentPoint}
-                  classification={currentClassification}
-                  speed={currentClassification?.features?.speed || currentPoint?.speed || 60}
-                  heading={currentPoint?.heading || 45}
-                />
-              )}
-
-              {viewMode === 'split' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', height: '100%' }}>
-                  <LeafletMapView
-                    highwayCoords={highwayCoords}
-                    serviceCoords={serviceCoords}
-                    points={points}
-                    currentIndex={currentIndex}
-                    classifications={classifications}
-                  />
-                  <ThreeVehicleViewer
-                    currentPoint={currentPoint}
-                    classification={currentClassification}
-                    speed={currentClassification?.features?.speed || currentPoint?.speed || 60}
-                    heading={currentPoint?.heading || 45}
-                  />
+          {/* VIEW 01: LIVE SIMULATION (PRIMARY COMMAND CENTER DASHBOARD) */}
+          {activeTab === 'live_simulation' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              
+              {/* Presenter Judge Demo Callout */}
+              {demoMode && (
+                <div style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1.5px solid #a855f7', borderRadius: '10px', padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '20px' }}>🏆</span>
+                    <div>
+                      <strong style={{ color: '#c084fc' }}>JUDGE PRESENTER DEMO MODE ACTIVE</strong>
+                      <div style={{ fontSize: '11px', color: '#cbd5e1' }}>
+                        Live Map-Matching: {currentClassification?.classified_road?.toUpperCase()} ({Math.round((currentClassification?.confidence || 0.95) * 100)}% Conf)
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleStartJudgeDemo}
+                    style={{ background: '#a855f7', color: '#ffffff', border: 'none', borderRadius: '6px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    ⚡ TRIGGER 15-STEP JUDGE DEMO
+                  </button>
                 </div>
               )}
+
+              {/* Adversarial Banner */}
+              <AdversarialBanner tier={tier} classification={currentClassification} />
+
+              {/* Anomaly Banner */}
+              <AnomalyBanner anomalyDetection={currentClassification?.anomaly_detection} currentPoint={currentPoint} />
+
+              {/* Main Dashboard Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(420px, 1fr) 1fr', gap: '20px', maxWidth: '1600px', margin: '0 auto' }}>
+                
+                {/* Left Column: Map/3D Canvas + Controls */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  
+                  {/* Map Container with Overlaid MapViewHUD */}
+                  <div style={{ background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', padding: '16px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>
+                        GEOSPATIAL VISUALIZATION CENTER
+                      </span>
+                      <div style={{ fontSize: '11px', color: '#38bdf8' }}>
+                        {viewMode === '2d' ? '2D Leaflet Map' : (viewMode === '3d' ? '3D Three.js Autonomous Vehicle View' : 'Split Screen View')}
+                      </div>
+                    </div>
+
+                    <div style={{ height: '420px', width: '100%', position: 'relative', borderRadius: '8px', overflow: 'hidden' }}>
+                      {/* Overlaid Map HUD */}
+                      <MapViewHUD
+                        currentPoint={currentPoint}
+                        classification={currentClassification}
+                        simSpeed={simSpeed}
+                        onChangeSimSpeed={setSimSpeed}
+                      />
+
+                      {viewMode === '2d' && (
+                        <LeafletMapView
+                          highwayCoords={highwayCoords}
+                          serviceCoords={serviceCoords}
+                          points={points}
+                          currentIndex={currentIndex}
+                          classifications={classifications}
+                        />
+                      )}
+
+                      {viewMode === '3d' && (
+                        <ThreeVehicleViewer
+                          currentPoint={currentPoint}
+                          classification={currentClassification}
+                          speed={currentClassification?.features?.speed || currentPoint?.speed || 60}
+                          heading={currentPoint?.heading || 45}
+                        />
+                      )}
+
+                      {viewMode === 'split' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', height: '100%' }}>
+                          <LeafletMapView
+                            highwayCoords={highwayCoords}
+                            serviceCoords={serviceCoords}
+                            points={points}
+                            currentIndex={currentIndex}
+                            classifications={classifications}
+                          />
+                          <ThreeVehicleViewer
+                            currentPoint={currentPoint}
+                            classification={currentClassification}
+                            speed={currentClassification?.features?.speed || currentPoint?.speed || 60}
+                            heading={currentPoint?.heading || 45}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Model Comparison Card */}
+                  <ModelComparisonCard predictions={currentClassification?.predictions} accuracySummary={accuracySummary} currentPoint={currentPoint} />
+
+                  {/* Control Panel */}
+                  <ControlPanel
+                    simStatus={simStatus}
+                    onStartSimulation={handleStartSimulation}
+                    onStopSimulation={handleStopSimulation}
+                    onResumeSimulation={handleResumeSimulation}
+                    onResetSimulation={handleResetSimulation}
+                    onStep={handleStepForward}
+                    currentIndex={currentIndex}
+                    totalPoints={points.length}
+                    onScrub={handleScrub}
+                    tier={tier}
+                    onChangeTier={handleChangeTier}
+                    roadChoice={roadChoice}
+                    onChangeRoadChoice={handleChangeRoadChoice}
+                    onStartJudgeDemo={handleStartJudgeDemo}
+                    onInjectNoise={handleInjectNoise}
+                    viewMode={viewMode}
+                    onChangeViewMode={setViewMode}
+                    confidenceThreshold={confidenceThreshold}
+                    onChangeConfidenceThreshold={setConfidenceThreshold}
+                    currentClassification={currentClassification}
+                  />
+                </div>
+
+                {/* Right Column: Fusion Breakdown, Telemetry, IMU HUD & Event Logs */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <FusionBreakdownCard classification={currentClassification} />
+                  <IMUKalmanHUD imuTelemetry={currentClassification?.imu_telemetry} kalmanEstimation={currentClassification?.kalman_estimation} isOutage={currentClassification?.is_outage} />
+                  <TelemetryPanel currentClassification={currentClassification} currentPoint={currentPoint} />
+                  <SystemHealthPanel backendConnected={backendConnected} isOutage={currentClassification?.is_outage} />
+                  <EventConsole events={events} />
+                </div>
+              </div>
+
+              {/* Segment Trajectory Log Table */}
+              <TrajectoryTable classifications={classifications} currentIndex={currentIndex} onSelectStep={setCurrentIndex} />
+
+              {/* Evaluation Panel */}
+              <EvaluationPanel accuracySummary={accuracySummary} />
             </div>
-          </div>
+          )}
 
-          {/* Feature 1: Model Comparison Card */}
-          <ModelComparisonCard
-            predictions={currentClassification?.predictions}
-            accuracySummary={accuracySummary}
-            currentPoint={currentPoint}
-          />
+          {/* VIEW 02: TRAJECTORY ANALYSIS */}
+          {activeTab === 'trajectory_analysis' && (
+            <TrajectoryAnalysisView
+              highwayCoords={highwayCoords}
+              serviceCoords={serviceCoords}
+              points={points}
+              classifications={classifications}
+              tier={tier}
+              roadChoice={roadChoice}
+            />
+          )}
 
-          {/* Control Panel */}
-          <ControlPanel
-            simStatus={simStatus}
-            onStartSimulation={handleStartSimulation}
-            onStopSimulation={handleStopSimulation}
-            onResumeSimulation={handleResumeSimulation}
-            onResetSimulation={handleResetSimulation}
-            onStep={handleStepForward}
-            currentIndex={currentIndex}
-            totalPoints={points.length}
-            onScrub={handleScrub}
-            tier={tier}
-            onChangeTier={handleChangeTier}
-            roadChoice={roadChoice}
-            onChangeRoadChoice={handleChangeRoadChoice}
-            onStartJudgeDemo={handleStartJudgeDemo}
-            onInjectNoise={handleInjectNoise}
-            viewMode={viewMode}
-            onChangeViewMode={setViewMode}
-            confidenceThreshold={confidenceThreshold}
-            onChangeConfidenceThreshold={setConfidenceThreshold}
-            currentClassification={currentClassification}
-          />
-        </div>
+          {/* VIEW 03: GNSS ANOMALIES */}
+          {activeTab === 'gnss_anomalies' && (
+            <GNSSAnomalyControlView
+              onInjectNoise={handleInjectNoise}
+              classification={currentClassification}
+              currentPoint={currentPoint}
+            />
+          )}
 
-        {/* Right Column: Fusion Breakdown, Telemetry, IMU HUD & Event Console */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          
-          {/* Feature 3 & 7: Transparent Fusion Engine Breakdown & GNSS Trust Score */}
-          <FusionBreakdownCard classification={currentClassification} />
+          {/* VIEW 04: AI EXPLAINABILITY */}
+          {activeTab === 'ai_explainability' && (
+            <AIExplainabilityView classification={currentClassification} />
+          )}
 
-          {/* Feature 2: IMU Sensor Fusion & EKF Kalman Filter HUD */}
-          <IMUKalmanHUD
-            imuTelemetry={currentClassification?.imu_telemetry}
-            kalmanEstimation={currentClassification?.kalman_estimation}
-            isOutage={currentClassification?.is_outage}
-          />
+          {/* VIEW 05: MODEL PERFORMANCE */}
+          {activeTab === 'model_performance' && (
+            <ModelPerformanceView accuracySummary={accuracySummary} />
+          )}
 
-          {/* Live Telemetry Panel */}
-          <TelemetryPanel
-            currentClassification={currentClassification}
-            currentPoint={currentPoint}
-          />
+          {/* VIEW 06: EVALUATION */}
+          {activeTab === 'evaluation' && (
+            <EvaluationView accuracySummary={accuracySummary} />
+          )}
 
-          {/* Feature 10: System Health Panel */}
-          <SystemHealthPanel
-            backendConnected={backendConnected}
-            isOutage={currentClassification?.is_outage}
-          />
+          {/* VIEW 07: SYSTEM LOGS */}
+          {activeTab === 'system_logs' && (
+            <SystemLogsView events={events} />
+          )}
 
-          {/* Event Console */}
-          <EventConsole events={events} />
-        </div>
+        </main>
       </div>
-
-      {/* Feature 9: Segment-by-Segment Trajectory Table */}
-      <TrajectoryTable
-        classifications={classifications}
-        currentIndex={currentIndex}
-        onSelectStep={setCurrentIndex}
-      />
-
-      {/* Feature 4: Evaluation & Reliability Calibration Section */}
-      <EvaluationPanel accuracySummary={accuracySummary} />
     </div>
   );
 }
