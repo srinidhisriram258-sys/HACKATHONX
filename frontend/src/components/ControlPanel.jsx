@@ -1,10 +1,12 @@
 import React from 'react';
 
 export default function ControlPanel({
-  isPlaying,
-  onTogglePlay,
+  simStatus,
+  onStartSimulation,
+  onStopSimulation,
+  onResumeSimulation,
+  onResetSimulation,
   onStep,
-  onReset,
   currentIndex,
   totalPoints,
   onScrub,
@@ -12,14 +14,17 @@ export default function ControlPanel({
   onChangeTier,
   roadChoice,
   onChangeRoadChoice,
-  onStartSimulation,
   onStartJudgeDemo,
   onInjectNoise,
   viewMode,
   onChangeViewMode,
   confidenceThreshold,
-  onChangeConfidenceThreshold
+  onChangeConfidenceThreshold,
+  currentClassification
 }) {
+  const confPct = Math.round((currentClassification?.confidence || 0.95) * 100);
+  const roadStr = (currentClassification?.classified_road || 'highway').replace('_', ' ').toUpperCase();
+
   return (
     <div style={{
       background: 'rgba(15, 23, 42, 0.75)',
@@ -31,7 +36,7 @@ export default function ControlPanel({
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <h3 style={{ margin: 0, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8', fontWeight: '700' }}>
-          SIMULATION &amp; DEMO CONTROLS
+          SIMULATION &amp; LIFECYCLE CONTROLS
         </h3>
 
         {/* 2D MAP / 3D VIEW / SPLIT VIEW Toggle */}
@@ -89,49 +94,89 @@ export default function ControlPanel({
         </div>
       </div>
 
-      {/* Main Action Buttons */}
+      {/* Feature 1: Explicit Stop / Start / Resume Buttons */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            onStartSimulation();
-          }}
-          style={{
-            background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '12px 14px',
-            fontSize: '13px',
-            fontWeight: '800',
-            cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px'
-          }}
-        >
-          ▶ START LIVE SIMULATION
-        </button>
+        {simStatus === 'RUNNING' ? (
+          <button
+            type="button"
+            onClick={onStopSimulation}
+            style={{
+              background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              fontSize: '13px',
+              fontWeight: '900',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            ■ STOP SIMULATION
+          </button>
+        ) : simStatus === 'STOPPED' || simStatus === 'PAUSED' ? (
+          <button
+            type="button"
+            onClick={onResumeSimulation}
+            style={{
+              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              fontSize: '13px',
+              fontWeight: '900',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            ▶ RESUME SIMULATION
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onStartSimulation}
+            style={{
+              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              fontSize: '13px',
+              fontWeight: '900',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            ▶ START LIVE SIMULATION
+          </button>
+        )}
 
         <button
           type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            onStartJudgeDemo();
-          }}
+          onClick={onStartJudgeDemo}
           style={{
-            background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+            background: 'linear-gradient(135deg, #a855f7 0%, #7e22ce 100%)',
             color: '#ffffff',
             border: 'none',
             borderRadius: '8px',
             padding: '12px 14px',
             fontSize: '13px',
-            fontWeight: '800',
+            fontWeight: '900',
             cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(220, 38, 38, 0.35)',
+            boxShadow: '0 4px 12px rgba(168, 85, 247, 0.35)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -142,11 +187,49 @@ export default function ControlPanel({
         </button>
       </div>
 
-      {/* Configuration Selectors & Safety Threshold Slider */}
+      {/* Stopped Lifecycle Status Banner */}
+      {simStatus === 'STOPPED' && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          border: '1px solid #ef4444',
+          borderRadius: '8px',
+          padding: '10px 14px',
+          marginBottom: '16px',
+          display: 'flex',
+          justify: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px'
+        }}>
+          <div>
+            <strong style={{ color: '#fca5a5' }}>SIMULATION STOPPED</strong>
+            <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '2px' }}>
+              Step {currentIndex} / {Math.max(0, totalPoints - 1)} | Match: {roadStr} ({confPct}%)
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onResetSimulation}
+            style={{
+              background: '#090d16',
+              color: '#fca5a5',
+              border: '1px solid #ef4444',
+              borderRadius: '6px',
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+          >
+            ↻ RESET
+          </button>
+        </div>
+      )}
+
+      {/* Feature 12: Scenario Selector */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
         <div>
           <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
-            GNSS Noise Scenario
+            Demo Scenario
           </label>
           <select
             value={tier}
@@ -161,9 +244,13 @@ export default function ControlPanel({
               fontSize: '11px'
             }}
           >
-            <option value="clean">Clean GPS (Jitter only)</option>
-            <option value="moderate">20m Noise + 15m Bias</option>
-            <option value="hard">Hard (35s GNSS Outage + EKF)</option>
+            <option value="clean">Clean GNSS</option>
+            <option value="moderate">20m Noise</option>
+            <option value="bias">15m Bias</option>
+            <option value="missing_points">Missing Points</option>
+            <option value="spoofing">GNSS Spoofing</option>
+            <option value="hard">35s Outage</option>
+            <option value="adversarial">🔥 Combined Adversarial</option>
           </select>
         </div>
 
@@ -184,7 +271,7 @@ export default function ControlPanel({
               fontSize: '11px'
             }}
           >
-            <option value="switch">Highway -&gt; Ramp -&gt; Service Switch</option>
+            <option value="switch">Highway -&gt; Service Switch</option>
             <option value="highway">Highway Only (NH-48)</option>
             <option value="service">Service Road Only</option>
           </select>
@@ -207,7 +294,7 @@ export default function ControlPanel({
         </div>
       </div>
 
-      {/* Live Noise & Anomaly Injection Controls */}
+      {/* Live Noise Injection Controls */}
       <div style={{
         background: '#090d16',
         padding: '10px 12px',
@@ -273,7 +360,7 @@ export default function ControlPanel({
         </div>
       </div>
 
-      {/* Scrub Bar & Timeline Controls */}
+      {/* Scrub Bar & Step Controls */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
           <span style={{ fontSize: '11px', color: '#94a3b8' }}>Timeline Progress</span>
@@ -291,46 +378,30 @@ export default function ControlPanel({
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             type="button"
-            onClick={onTogglePlay}
-            style={{
-              flex: 1,
-              background: isPlaying ? '#eab308' : '#10b981',
-              color: '#090d16',
-              border: 'none',
-              borderRadius: '6px',
-              padding: '8px',
-              fontWeight: '800',
-              cursor: 'pointer'
-            }}
-          >
-            {isPlaying ? '⏸ Pause' : '▶ Play'}
-          </button>
-
-          <button
-            type="button"
             onClick={onStep}
             style={{
+              flex: 1,
               background: '#1e293b',
               color: '#f8fafc',
               border: '1px solid #334155',
               borderRadius: '6px',
-              padding: '8px 14px',
+              padding: '8px',
               fontWeight: 'bold',
               cursor: 'pointer'
             }}
           >
-            ⏭ Step
+            ⏭ Step Forward
           </button>
 
           <button
             type="button"
-            onClick={onReset}
+            onClick={onResetSimulation}
             style={{
               background: '#1e293b',
               color: '#94a3b8',
               border: '1px solid #334155',
               borderRadius: '6px',
-              padding: '8px 14px',
+              padding: '8px 16px',
               fontWeight: 'bold',
               cursor: 'pointer'
             }}
