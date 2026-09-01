@@ -16,7 +16,9 @@ export default function ControlPanel({
   onStartJudgeDemo,
   onInjectNoise,
   viewMode,
-  onChangeViewMode
+  onChangeViewMode,
+  confidenceThreshold,
+  onChangeConfidenceThreshold
 }) {
   return (
     <div style={{
@@ -35,6 +37,7 @@ export default function ControlPanel({
         {/* 2D MAP / 3D VIEW / SPLIT VIEW Toggle */}
         <div style={{ display: 'flex', background: '#090d16', padding: '3px', borderRadius: '6px', border: '1px solid #334155' }}>
           <button
+            type="button"
             onClick={() => onChangeViewMode('2d')}
             style={{
               background: viewMode === '2d' ? '#2563eb' : 'transparent',
@@ -51,6 +54,7 @@ export default function ControlPanel({
           </button>
 
           <button
+            type="button"
             onClick={() => onChangeViewMode('3d')}
             style={{
               background: viewMode === '3d' ? '#a855f7' : 'transparent',
@@ -67,6 +71,7 @@ export default function ControlPanel({
           </button>
 
           <button
+            type="button"
             onClick={() => onChangeViewMode('split')}
             style={{
               background: viewMode === 'split' ? '#10b981' : 'transparent',
@@ -133,12 +138,12 @@ export default function ControlPanel({
             gap: '8px'
           }}
         >
-          ⚡ START JUDGE DEMO
+          ⚡ START JUDGE DEMO (15 STEPS)
         </button>
       </div>
 
-      {/* Configuration Selectors */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+      {/* Configuration Selectors & Safety Threshold Slider */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
         <div>
           <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
             GNSS Noise Scenario
@@ -152,13 +157,13 @@ export default function ControlPanel({
               color: '#f8fafc',
               border: '1px solid #334155',
               borderRadius: '6px',
-              padding: '7px 10px',
-              fontSize: '12px'
+              padding: '6px 8px',
+              fontSize: '11px'
             }}
           >
             <option value="clean">Clean GPS (Jitter only)</option>
             <option value="moderate">20m Noise + 15m Bias</option>
-            <option value="hard">Hard (35s GNSS Outage + Dead Reckoning)</option>
+            <option value="hard">Hard (35s GNSS Outage + EKF)</option>
           </select>
         </div>
 
@@ -175,8 +180,8 @@ export default function ControlPanel({
               color: '#f8fafc',
               border: '1px solid #334155',
               borderRadius: '6px',
-              padding: '7px 10px',
-              fontSize: '12px'
+              padding: '6px 8px',
+              fontSize: '11px'
             }}
           >
             <option value="switch">Highway -&gt; Ramp -&gt; Service Switch</option>
@@ -184,9 +189,25 @@ export default function ControlPanel({
             <option value="service">Service Road Only</option>
           </select>
         </div>
+
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>
+            <span>Safety Threshold</span>
+            <span style={{ color: '#fb923c', fontWeight: 'bold' }}>{confidenceThreshold}%</span>
+          </div>
+          <input
+            type="range"
+            min={40}
+            max={90}
+            step={5}
+            value={confidenceThreshold}
+            onChange={(e) => onChangeConfidenceThreshold(parseInt(e.target.value, 10))}
+            style={{ width: '100%', accentColor: '#fb923c', cursor: 'pointer', marginTop: '6px' }}
+          />
+        </div>
       </div>
 
-      {/* Live Noise Injection Buttons (Judge Panel) */}
+      {/* Live Noise & Anomaly Injection Controls */}
       <div style={{
         background: '#090d16',
         padding: '10px 12px',
@@ -195,10 +216,10 @@ export default function ControlPanel({
         marginBottom: '16px'
       }}>
         <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#f8fafc', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
-          <span>LIVE NOISE INJECTION (JUDGE CONTROLS)</span>
+          <span>LIVE NOISE &amp; ANOMALY INJECTION (JUDGE CONTROLS)</span>
           <span style={{ color: '#ef4444' }}>● READY</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
           <button
             type="button"
             onClick={() => onInjectNoise('multipath')}
@@ -207,13 +228,13 @@ export default function ControlPanel({
               color: '#fb923c',
               border: '1px solid #f97316',
               borderRadius: '6px',
-              padding: '7px 10px',
-              fontSize: '11px',
+              padding: '6px 8px',
+              fontSize: '10px',
               fontWeight: 'bold',
               cursor: 'pointer'
             }}
           >
-            ⚠️ Inject 15m Multipath Bias
+            ⚠️ 15m Multipath Bias
           </button>
 
           <button
@@ -224,13 +245,30 @@ export default function ControlPanel({
               color: '#fca5a5',
               border: '1px solid #ef4444',
               borderRadius: '6px',
-              padding: '7px 10px',
-              fontSize: '11px',
+              padding: '6px 8px',
+              fontSize: '10px',
               fontWeight: 'bold',
               cursor: 'pointer'
             }}
           >
-            🛑 Kill GPS for 35s
+            🛑 35s GNSS Outage
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onInjectNoise('spoofing')}
+            style={{
+              background: '#1e293b',
+              color: '#c084fc',
+              border: '1px solid #a855f7',
+              borderRadius: '6px',
+              padding: '6px 8px',
+              fontSize: '10px',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+          >
+            🚨 GNSS Spoof Jump
           </button>
         </div>
       </div>

@@ -1,12 +1,11 @@
 from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List, Optional
-import json
 
 from app.data_gen import generate_road_geometry, generate_synthetic_trajectory
 from app.models.hmm_model import HMMMapMatcher
 
-app = FastAPI(title="RoadTrace AI Map-Matching API", version="1.0.0")
+app = FastAPI(title="RoadTrace AI Map-Matching API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,7 +19,7 @@ hmm_matcher = HMMMapMatcher()
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "2.0.0-upgrade"}
 
 @app.get("/roads")
 def get_roads():
@@ -33,7 +32,7 @@ def get_roads():
             "type": "LineString",
             "coordinates": [[lon, lat] for lat, lon in highway_coords]
         },
-        "properties": {"name": "Highway (Motorway)", "color": "#2563eb"}
+        "properties": {"name": "NH-48 Highway (Motorway)", "color": "#2563eb"}
     }
     
     service_geojson = {
@@ -42,7 +41,7 @@ def get_roads():
             "type": "LineString",
             "coordinates": [[lon, lat] for lat, lon in service_coords]
         },
-        "properties": {"name": "Service Road", "color": "#f97316"}
+        "properties": {"name": "Service Road (12.4m Separation)", "color": "#f97316"}
     }
     
     return {
@@ -54,37 +53,39 @@ def get_roads():
 
 @app.post("/trajectory/generate")
 def generate_trajectory(payload: Dict[str, Any] = Body(...)):
-    """Generates synthetic noisy trajectory and returns HMM classifications."""
+    """Generates synthetic noisy trajectory and returns multi-model classifications & EKF state."""
     tier = payload.get("tier", "hard")
     road_choice = payload.get("road_choice", "switch")
     
     highway_coords, service_coords, points = generate_synthetic_trajectory(tier=tier, road_choice=road_choice)
-    classifications = hmm_matcher.classify_trajectory(points, highway_coords, service_coords)
+    res = hmm_matcher.classify_trajectory(points, highway_coords, service_coords)
     
     return {
         "tier": tier,
         "road_choice": road_choice,
         "points": points,
-        "classifications": classifications
+        "classifications": res["classifications"],
+        "accuracy_summary": res["accuracy_summary"]
     }
 
 @app.post("/trajectory/classify")
 def classify_trajectory(payload: Dict[str, Any] = Body(...)):
-    """Classifies a given trajectory using the HMM model."""
+    """Classifies a given trajectory using Random Forest + HMM Viterbi + EKF Kalman Filter."""
     points = payload.get("points", [])
     highway_coords, service_coords = generate_road_geometry()
     
-    classifications = hmm_matcher.classify_trajectory(points, highway_coords, service_coords)
+    res = hmm_matcher.classify_trajectory(points, highway_coords, service_coords)
     return {
-        "classifications": classifications,
+        "classifications": res["classifications"],
+        "accuracy_summary": res["accuracy_summary"],
         "total_points": len(points)
     }
 
 @app.post("/trajectory/inject_noise")
 def inject_noise(payload: Dict[str, Any] = Body(...)):
-    """Live noise injection endpoint powering judge demo feature."""
+    """Live noise injection endpoint powering judge demo & spoofing test feature."""
     points = payload.get("points", [])
-    event_type = payload.get("event_type", "outage") # "outage" or "multipath"
+    event_type = payload.get("event_type", "outage") # "outage", "multipath", or "spoofing"
     start_index = int(payload.get("start_index", 20))
     duration = int(payload.get("duration", 15))
     
@@ -101,17 +102,24 @@ def inject_noise(payload: Dict[str, Any] = Body(...)):
             elif event_type == "multipath":
                 new_pt["is_outage"] = False
                 if new_pt.get("noisy_lat") is not None:
-                    # Offset position by 25m toward wrong road
-                    new_pt["noisy_lat"] += 25.0 / 111000.0
-                    new_pt["noisy_lon"] += 25.0 / 111000.0
+                    new_pt["noisy_lat"] += 15.0 / 111000.0
+                    new_pt["noisy_lon"] += 15.0 / 111000.0
+            elif event_type == "spoofing":
+                new_pt["is_outage"] = False
+                if new_pt.get("noisy_lat") is not None:
+                    # Physically implausible position jump (50m sudden jump)
+                    new_pt["noisy_lat"] += 45.0 / 111000.0
+                    new_pt["noisy_lon"] += 45.0 / 111000.0
+                    new_pt["gnss_error_m"] = 45.0
         modified_points.append(new_pt)
         
-    classifications = hmm_matcher.classify_trajectory(modified_points, highway_coords, service_coords)
+    res = hmm_matcher.classify_trajectory(modified_points, highway_coords, service_coords)
     
     return {
         "event_type": event_type,
         "start_index": start_index,
         "duration": duration,
         "points": modified_points,
-        "classifications": classifications
+        "classifications": res["classifications"],
+        "accuracy_summary": res["accuracy_summary"]
     }
