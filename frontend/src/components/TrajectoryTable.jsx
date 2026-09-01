@@ -65,8 +65,8 @@ export default function TrajectoryTable({ classifications, currentIndex, onSelec
                   <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>
                     {String(row.step).padStart(3, '0')} {isCurrent ? '◄' : ''}
                   </td>
-                  <td style={{ padding: '6px 8px', color: row.true_road === 'highway' ? '#60a5fa' : '#fb923c' }}>
-                    {row.true_road.toUpperCase()}
+                  <td style={{ padding: '6px 8px', color: (row.true_road || 'highway') === 'highway' ? '#60a5fa' : '#fb923c' }}>
+                    {(row.true_road || 'highway').toUpperCase()}
                   </td>
                   <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>
                     {rfPhw}
