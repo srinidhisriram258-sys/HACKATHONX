@@ -16,6 +16,9 @@ import FusionBreakdownCard from './components/FusionBreakdownCard';
 import TrajectoryTable from './components/TrajectoryTable';
 import AdversarialBanner from './components/AdversarialBanner';
 
+// Local Edge Inference Failsafe Engine
+import { localEdgeEngine } from './services/edgeInference';
+
 // Secondary Navigation Views
 import TrajectoryAnalysisView from './components/views/TrajectoryAnalysisView';
 import GNSSAnomalyControlView from './components/views/GNSSAnomalyControlView';
@@ -34,6 +37,10 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
   const [simSpeed, setSimSpeed] = useState(1);
+
+  // Explicit Failsafe Inference Mode ('LIVE_BACKEND' | 'EDGE_INFERENCE' | 'SYNTHETIC_DEMO')
+  const [inferenceMode, setInferenceMode] = useState('LIVE_BACKEND');
+  const [isSimulatedBackendFailure, setIsSimulatedBackendFailure] = useState(false);
 
   // Simulation & Model Data States
   const [highwayCoords, setHighwayCoords] = useState([]);
@@ -58,6 +65,18 @@ export default function App() {
     setEvents(prev => [...prev.slice(-45), { time: timeStr, type, message }]);
   }, []);
 
+  // Local Edge Inference Execution
+  const runEdgeInference = useCallback((pts, hw, srv) => {
+    if (!pts || pts.length === 0 || !hw || hw.length === 0) {
+      setInferenceMode('SYNTHETIC_DEMO');
+      return;
+    }
+    const res = localEdgeEngine.classifyTrajectoryLocally(pts, hw, srv);
+    setClassifications(res.classifications);
+    setAccuracySummary(res.accuracy_summary);
+    setInferenceMode('EDGE_INFERENCE');
+  }, []);
+
   // Local synthetic fallback data generator
   const generateLocalData = useCallback((selectedTier, selectedChoice) => {
     const num_points = 100;
@@ -66,7 +85,6 @@ export default function App() {
     const hw = [];
     const srv = [];
     const pts = [];
-    const cls = [];
 
     for (let i = 0; i < 120; i++) {
       const t = i / 119.0;
@@ -117,7 +135,6 @@ export default function App() {
       }
 
       const gnss_err = is_outage ? 0.0 : (selectedTier === 'clean' ? 2.2 : ((selectedTier === 'spoofing' || selectedTier === 'adversarial') && i >= 32 && i <= 36 ? 52.0 : 14.5));
-      const anomaly_score = ((selectedTier === 'spoofing' || selectedTier === 'adversarial') && i >= 32 && i <= 36) ? 0.85 : (is_outage ? 0.0 : 0.05);
 
       pts.push({
         step: i,
@@ -134,110 +151,15 @@ export default function App() {
         true_road: true_road,
         is_outage: is_outage
       });
-
-      const outageSec = is_outage ? (i - 50 + 1) : 0;
-      const conf = is_outage ? Math.max(0.35, Math.round(0.95 * Math.exp(-0.012 * outageSec) * 100) / 100) : 0.94;
-      const trustScore = is_outage ? 0 : Math.max(5, Math.round(100 - anomaly_score * 60 - Math.max(0, gnss_err - 2.5) * 2.8));
-      const nearestPred = ((selectedTier === 'bias' || selectedTier === 'adversarial') && i >= 15 && i <= 28) ? 'service_road' : true_road;
-
-      cls.push({
-        step: i,
-        timestamp: i * 1.0,
-        classified_road: true_road,
-        confidence: conf,
-        uncertainty_radius_m: is_outage ? (8.0 + 1.2 * outageSec) : 5.5,
-        mode: is_outage ? 'DEAD RECKONING (IMU + KALMAN)' : 'HMM + RF + KALMAN FUSION',
-        road_state_status: 'ROAD STATE STABLE',
-        is_outage: is_outage,
-        predictions: {
-          nearest_road: nearestPred,
-          random_forest: true_road,
-          rf_confidence: 0.913,
-          p_highway: true_road === 'highway' ? 0.913 : 0.087,
-          p_service: true_road === 'highway' ? 0.087 : 0.913,
-          hmm_viterbi: true_road,
-          hmm_confidence: 0.954,
-          fusion_engine: true_road,
-          fusion_confidence: conf
-        },
-        fusion_breakdown: {
-          rf_probability: true_road === 'highway' ? 0.913 : 0.087,
-          heading_score: 0.92,
-          speed_profile_score: 0.88,
-          road_geometry_score: 0.94,
-          temporal_continuity_score: 0.95,
-          imu_kalman_score: 0.95,
-          gnss_trust_score: trustScore,
-          anomaly_penalty: anomaly_score,
-          reasons_why: [
-            `✓ Random Forest probability favors ${true_road === 'highway' ? 'Highway (0.913)' : 'Service Road (0.913)'}`,
-            `✓ Vehicle heading (45°) matches ${true_road === 'highway' ? 'Highway' : 'Service Road'} tangent`,
-            `✓ Speed profile (${speed} km/h) matches ${true_road === 'highway' ? 'Highway' : 'Service Road'} kinematics`,
-            `✓ HMM Temporal Viterbi path supports ${true_road === 'highway' ? 'Highway' : 'Service Road'}`,
-            `✓ GNSS Trust Score = ${trustScore}%`,
-            `⚠ GNSS anomaly penalty = -${anomaly_score}`
-          ]
-        },
-        features: {
-          d_highway_m: true_road === 'highway' ? 2.5 : 12.4,
-          d_service_m: true_road === 'highway' ? 12.4 : 2.5,
-          dist_diff_m: true_road === 'highway' ? 9.9 : -9.9,
-          speed: speed,
-          heading: heading,
-          is_outage: is_outage,
-          outage_seconds: outageSec,
-          p_highway: true_road === 'highway' ? 0.913 : 0.087,
-          p_service: true_road === 'highway' ? 0.087 : 0.913,
-          gnss_trust_score: trustScore
-        },
-        imu_telemetry: {
-          accel_x: 0.15,
-          accel_y: -0.02,
-          yaw_rate: 0.001,
-          imu_status: "ACTIVE"
-        },
-        anomaly_detection: {
-          classification: is_outage ? "GNSS OUTAGE" : (anomaly_score >= 0.4 ? "ANOMALOUS / POSSIBLE SPOOFING" : (gnss_err >= 14 ? "BIAS" : "NORMAL")),
-          is_anomalous: anomaly_score >= 0.4,
-          anomaly_score: anomaly_score,
-          implied_speed_kmh: anomaly_score >= 0.4 ? 184.2 : speed,
-          jump_distance_m: anomaly_score >= 0.4 ? 52.0 : 2.5,
-          implied_accel_ms2: anomaly_score >= 0.4 ? 9.4 : 0.2,
-          reason: is_outage ? "GNSS Signal Lost (35s Outage)" : (anomaly_score >= 0.4 ? "Position jump (52m) exceeds kinematic bound" : "Clean GNSS fix")
-        },
-        kalman_estimation: {
-          kalman_lat: dr_lat || nlat || tlat,
-          kalman_lon: dr_lon || nlon || tlon,
-          kalman_speed_kmh: speed,
-          kalman_heading_deg: heading,
-          cov_trace: is_outage ? 0.0025 : 0.0001
-        }
-      });
     }
 
     setHighwayCoords(hw);
     setServiceCoords(srv);
     setPoints(pts);
-    setClassifications(cls);
-    setAccuracySummary({
-      nearest_road_acc: selectedTier === 'adversarial' ? 52.0 : 68.5,
-      random_forest_acc: 91.2,
-      hmm_viterbi_acc: 95.4,
-      fusion_engine_acc: 94.7,
-      precision: 96.1,
-      recall: 93.8,
-      f1_score: 94.9,
-      confusion_matrix: { tp: 58, fp: 2, tn: 38, fn: 2 },
-      inference_latency_ms: 1.42,
-      calibration_buckets: {
-        "50-60%": { predicted_range: "50-60%", total_samples: 6, actual_accuracy: 58.3 },
-        "60-70%": { predicted_range: "60-70%", total_samples: 10, actual_accuracy: 67.5 },
-        "70-80%": { predicted_range: "70-80%", total_samples: 32, actual_accuracy: 78.0 },
-        "80-90%": { predicted_range: "80-90%", total_samples: 18, actual_accuracy: 88.5 },
-        "90-100%": { predicted_range: "90-100%", total_samples: 34, actual_accuracy: 96.8 }
-      }
-    });
-  }, []);
+
+    // Run Local Edge Inference on generated trajectory
+    runEdgeInference(pts, hw, srv);
+  }, [runEdgeInference]);
 
   const fetchRoads = useCallback(async () => {
     try {
@@ -247,15 +169,21 @@ export default function App() {
         setHighwayCoords(data.raw_highway_coords || []);
         setServiceCoords(data.raw_service_coords || []);
         setBackendConnected(true);
-        addEvent('GPS', 'Connected to FastAPI backend at http://127.0.0.1:8080');
+        addEvent('BACKEND_CONNECTED', 'FastAPI backend connected at http://127.0.0.1:8080');
       } else throw new Error('Non-200 /roads');
     } catch (err) {
       setBackendConnected(false);
-      addEvent('DEMO', 'FastAPI backend offline, active in LOCAL SYNTHETIC DEMO mode');
+      addEvent('BACKEND_DISCONNECTED', 'FastAPI backend unavailable; switching to LOCAL EDGE INFERENCE');
     }
   }, [addEvent]);
 
   const loadTrajectory = useCallback(async (selectedTier = tier, selectedChoice = roadChoice) => {
+    if (isSimulatedBackendFailure) {
+      addEvent('EDGE_MODE_ACTIVATED', 'Simulated backend failure active; running Local Edge Inference');
+      generateLocalData(selectedTier, selectedChoice);
+      return;
+    }
+
     try {
       const res = await fetch(`${BACKEND_URL}/trajectory/generate`, {
         method: 'POST',
@@ -267,22 +195,41 @@ export default function App() {
         setPoints(data.points || []);
         setClassifications(data.classifications || []);
         setAccuracySummary(data.accuracy_summary || null);
-        setCurrentIndex(0);
+        setInferenceMode('LIVE_BACKEND');
         setBackendConnected(true);
       } else throw new Error('Non-200 trajectory');
     } catch (err) {
       setBackendConnected(false);
+      addEvent('EDGE_MODE_ACTIVATED', 'Backend HTTP failure detected; executing Local Edge Inference');
       generateLocalData(selectedTier, selectedChoice);
-      setCurrentIndex(0);
     }
-  }, [tier, roadChoice, generateLocalData]);
+  }, [tier, roadChoice, isSimulatedBackendFailure, generateLocalData, addEvent]);
 
   useEffect(() => {
     fetchRoads();
     loadTrajectory('hard', 'switch');
   }, [fetchRoads, loadTrajectory]);
 
-  // Simulation Lifecycle Timer Loop with Speed Multiplier Support
+  // Feature 9: Failsafe Simulation Action Handlers
+  const handleSimulateBackendFailure = () => {
+    setIsSimulatedBackendFailure(true);
+    setBackendConnected(false);
+    addEvent('BACKEND_DISCONNECTED', '⚡ SIMULATED BACKEND DISCONNECTION TRIGGERED');
+    addEvent('EDGE_MODE_ACTIVATED', 'Local Edge Inference Engine activated seamlessly');
+    
+    // Switch to local edge inference on current active trajectory & step
+    runEdgeInference(points, highwayCoords, serviceCoords);
+  };
+
+  const handleRestoreBackend = async () => {
+    setIsSimulatedBackendFailure(false);
+    addEvent('BACKEND_RECONNECTED', 'Restoring FastAPI backend connection...');
+    await fetchRoads();
+    await loadTrajectory(tier, roadChoice);
+    addEvent('SYSTEM', 'Switched to LIVE BACKEND inference mode');
+  };
+
+  // Simulation Lifecycle Timer Loop
   useEffect(() => {
     if (simStatus === 'RUNNING') {
       const intervalMs = Math.max(50, Math.floor(250 / simSpeed));
@@ -305,14 +252,14 @@ export default function App() {
           else if (nextIdx === 20) addEvent('NOISE', '2. GNSS noise level increasing (12m jitter).');
           else if (nextIdx === 25) {
             addEvent('NOISE', '3. 15m Multipath Bias! Nearest Road baseline fails & flips to Service Road.');
-            addEvent('SUCCESS', '4. Random Forest (91.2%) & HMM Viterbi (95.4%) correct map-match to Highway.');
+            addEvent('SUCCESS', '4. Random Forest & HMM Viterbi correct map-match to Highway.');
           } else if (nextIdx === 40) addEvent('DEMO', '5. Anomaly Detector: Verifying velocity & kinematic bounds.');
           else if (nextIdx === 50) {
-            addEvent('OUTAGE', '6. CRITICAL: 35-Second GNSS Outage Triggered! GNSS = LOST.');
-            addEvent('DEMO', '7. IMU + EKF Kalman Filter Active: Propagating via accel_x, accel_y & yaw_rate.');
+            addEvent('GNSS_OUTAGE_STARTED', '6. CRITICAL: 35-Second GNSS Outage Triggered! GNSS = LOST.');
+            addEvent('EDGE_INFERENCE', '7. IMU + EKF Kalman Filter Active: Propagating via accel_x, accel_y & yaw_rate.');
           } else if (nextIdx === 70) addEvent('OUTAGE', '8. Confidence decaying (68%), EKF uncertainty sphere expanding.');
           else if (nextIdx === 86) {
-            addEvent('GPS', '9. GNSS Signal Restored! EKF measurement update executed.');
+            addEvent('GNSS_RECOVERED', '9. GNSS Signal Restored! EKF measurement update executed.');
             addEvent('SUCCESS', '10. ✓ CONFIDENCE RECOVERED to 95%.');
           }
 
@@ -323,7 +270,7 @@ export default function App() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [simStatus, points, classifications, confidenceThreshold, simSpeed, addEvent]);
 
-  // Lifecycle Control Handlers
+  // Lifecycle Control Handlers (PRESERVES STATE)
   const handleStartSimulation = () => {
     setCurrentIndex(0);
     setSimStatus('RUNNING');
@@ -378,15 +325,15 @@ export default function App() {
 
     addEvent('DEMO', '==================================================');
     addEvent('DEMO', 'START JUDGE DEMO (15-STEP EXTENDED SEQUENCE)');
-    addEvent('DEMO', '1. Clean GNSS -> 2. GNSS Noise -> 3. GNSS Bias -> 4. Nearest Road Ambiguity');
-    addEvent('DEMO', '5. Random Forest Class -> 6. HMM Smoothing -> 7. Fusion Engine Decision');
-    addEvent('DEMO', '8. GNSS Anomaly Detection -> 9. 35s GNSS Outage -> 10. IMU + Kalman Propagation');
-    addEvent('DEMO', '11. Confidence Decay -> 12. GNSS Recovery -> 13. Confidence Recovery');
-    addEvent('DEMO', '14. Evaluation -> 15. Explainability');
     addEvent('DEMO', '==================================================');
   };
 
   const handleInjectNoise = async (eventType) => {
+    if (isSimulatedBackendFailure || !backendConnected) {
+      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndex}`);
+      return;
+    }
+
     try {
       const res = await fetch(`${BACKEND_URL}/trajectory/inject_noise`, {
         method: 'POST',
@@ -406,7 +353,7 @@ export default function App() {
         addEvent('OUTAGE', `Injected event (${eventType.toUpperCase()}) applied for 35s at step ${currentIndex}`);
       } else throw new Error('Noise injection API failed');
     } catch (err) {
-      addEvent('OUTAGE', `Injected event (${eventType.toUpperCase()}) simulated locally at step ${currentIndex}`);
+      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndex}`);
     }
   };
 
@@ -427,7 +374,7 @@ export default function App() {
       {/* Command Center Top Header */}
       <Header
         simStatus={simStatus}
-        backendConnected={backendConnected}
+        inferenceMode={inferenceMode}
         isOutage={currentClassification?.is_outage}
         demoMode={demoMode}
         onToggleDemoMode={() => setDemoMode(d => !d)}
@@ -458,7 +405,7 @@ export default function App() {
                     <div>
                       <strong style={{ color: '#c084fc' }}>JUDGE PRESENTER DEMO MODE ACTIVE</strong>
                       <div style={{ fontSize: '11px', color: '#cbd5e1' }}>
-                        Live Map-Matching: {currentClassification?.classified_road?.toUpperCase()} ({Math.round((currentClassification?.confidence || 0.95) * 100)}% Conf)
+                        Live Map-Matching: {currentClassification?.classified_road?.toUpperCase()} ({Math.round((currentClassification?.confidence || 0.95) * 100)}% Conf) • Mode: {inferenceMode}
                       </div>
                     </div>
                   </div>
@@ -496,7 +443,6 @@ export default function App() {
                     </div>
 
                     <div style={{ height: '420px', width: '100%', position: 'relative', borderRadius: '8px', overflow: 'hidden' }}>
-                      {/* Overlaid Map HUD */}
                       <MapViewHUD
                         currentPoint={currentPoint}
                         classification={currentClassification}
@@ -576,7 +522,16 @@ export default function App() {
                   <FusionBreakdownCard classification={currentClassification} />
                   <IMUKalmanHUD imuTelemetry={currentClassification?.imu_telemetry} kalmanEstimation={currentClassification?.kalman_estimation} isOutage={currentClassification?.is_outage} />
                   <TelemetryPanel currentClassification={currentClassification} currentPoint={currentPoint} />
-                  <SystemHealthPanel backendConnected={backendConnected} isOutage={currentClassification?.is_outage} />
+                  
+                  {/* System Health Panel with Failsafe Triggers */}
+                  <SystemHealthPanel
+                    inferenceMode={inferenceMode}
+                    isSimulatedFailure={isSimulatedBackendFailure}
+                    onSimulateBackendFailure={handleSimulateBackendFailure}
+                    onRestoreBackend={handleRestoreBackend}
+                    isOutage={currentClassification?.is_outage}
+                  />
+
                   <EventConsole events={events} />
                 </div>
               </div>
@@ -607,6 +562,10 @@ export default function App() {
               onInjectNoise={handleInjectNoise}
               classification={currentClassification}
               currentPoint={currentPoint}
+              isSimulatedFailure={isSimulatedBackendFailure}
+              onSimulateBackendFailure={handleSimulateBackendFailure}
+              onRestoreBackend={handleRestoreBackend}
+              inferenceMode={inferenceMode}
             />
           )}
 

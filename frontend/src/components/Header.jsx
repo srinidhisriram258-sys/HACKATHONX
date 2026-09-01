@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function Header({
   simStatus,
-  backendConnected,
+  inferenceMode, // 'LIVE_BACKEND' | 'EDGE_INFERENCE' | 'SYNTHETIC_DEMO'
   isOutage,
   demoMode,
   onToggleDemoMode
@@ -16,7 +16,19 @@ export default function Header({
     }
   };
 
+  const getModeBadge = () => {
+    switch (inferenceMode) {
+      case 'LIVE_BACKEND':
+        return { bg: 'rgba(16, 185, 129, 0.15)', border: '#10b981', color: '#34d399', text: '● LIVE BACKEND (FASTAPI)' };
+      case 'EDGE_INFERENCE':
+        return { bg: 'rgba(234, 179, 8, 0.2)', border: '#eab308', color: '#fde047', text: '● EDGE INFERENCE (LOCAL JS)' };
+      default:
+        return { bg: 'rgba(168, 85, 247, 0.15)', border: '#a855f7', color: '#c084fc', text: '● SYNTHETIC DEMO' };
+    }
+  };
+
   const badge = getSimBadge();
+  const modeBadge = getModeBadge();
 
   return (
     <header style={{
@@ -59,12 +71,12 @@ export default function Header({
         </div>
       </div>
 
-      {/* Top Status Indicators & Demo Mode Toggle */}
+      {/* Top Status Indicators & Presenter Mode Toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         {/* Status Pills */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', fontWeight: 'bold' }}>
-          <span style={{ padding: '4px 10px', borderRadius: '20px', background: backendConnected ? 'rgba(16, 185, 129, 0.12)' : 'rgba(168, 85, 247, 0.12)', border: `1px solid ${backendConnected ? '#10b981' : '#a855f7'}`, color: backendConnected ? '#34d399' : '#c084fc' }}>
-            ● API {backendConnected ? 'ONLINE' : 'SYNTHETIC'}
+          <span style={{ padding: '4px 10px', borderRadius: '20px', background: modeBadge.bg, border: `1px solid ${modeBadge.border}`, color: modeBadge.color }}>
+            {modeBadge.text}
           </span>
 
           <span style={{ padding: '4px 10px', borderRadius: '20px', background: 'rgba(168, 85, 247, 0.12)', border: '1px solid #a855f7', color: '#c084fc' }}>
