@@ -60,6 +60,7 @@ export default function App() {
 
   // DETERMINISTIC LIFECYCLE REFS
   const simulationGenerationRef = useRef(0);
+  const judgeDemoGenerationRef = useRef(0);
   const animFrameRef = useRef(null);
   const currentIndexRef = useRef(0);
   const simSpeedRef = useRef(1);
@@ -146,6 +147,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       simulationGenerationRef.current += 1;
+      judgeDemoGenerationRef.current += 1;
       stopScheduler();
     };
   }, [stopScheduler]);
@@ -162,7 +164,7 @@ export default function App() {
     setInferenceMode('EDGE_INFERENCE');
   }, []);
 
-  // Local synthetic fallback data generator
+  // Synchronous Local Trajectory Pre-loader for Zero-Delay Startup (PROBLEM 8)
   const generateLocalData = useCallback((selectedTier, selectedChoice) => {
     const num_points = 100;
     const base_lat = 13.0827;
@@ -297,12 +299,14 @@ export default function App() {
     }
   }, [tier, roadChoice, isSimulatedBackendFailure, generateLocalData, addEvent]);
 
+  // MOUNT INITIALIZATION: Preload memory dataset at T=0 (PROBLEM 8)
   useEffect(() => {
+    generateLocalData('hard', 'switch'); // Instant memory preload!
     fetchRoads();
     loadTrajectory('hard', 'switch');
-  }, [fetchRoads, loadTrajectory]);
+  }, []); // Run once on mount
 
-  // Feature 9: Failsafe Simulation Action Handlers
+  // Failsafe Simulation Action Handlers
   const handleSimulateBackendFailure = useCallback(() => {
     setIsSimulatedBackendFailure(true);
     setBackendConnected(false);
@@ -320,14 +324,16 @@ export default function App() {
     addEvent('SYSTEM', 'Switched to LIVE BACKEND inference mode');
   }, [fetchRoads, loadTrajectory, tier, roadChoice, addEvent]);
 
-  // DETERMINISTIC LIFECYCLE CONTROLS (PART 2, 3, 4, 5)
+  // INSTANT DETERMINISTIC LIFECYCLE CONTROLS (PROBLEM 1, 4, 5, 7)
   const handleStartSimulation = useCallback(() => {
     if (simStatus === 'RUNNING') return; // Debounce duplicate start
 
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     const gen = simulationGenerationRef.current;
     stopScheduler();
 
+    // Instant State & UI Update (T = 0 ms)
     currentIndexRef.current = 0;
     setCurrentIndex(0);
     setSimStatus('RUNNING');
@@ -335,12 +341,19 @@ export default function App() {
     addEvent('SIMULATION_STARTED', 'START LIVE SIMULATION: Autonomous vehicle moving through Chennai NH-48 corridor.');
     addEvent('SIMULATION_LOOP_CREATED', `Simulation scheduler #${gen} created via rAF.`);
 
+    // If points are not initialized yet, generate locally instantly
+    if (pointsRef.current.length === 0) {
+      generateLocalData(tier, roadChoice);
+    }
+
+    // Immediately start rAF loop
     startScheduler(gen);
-  }, [simStatus, stopScheduler, startScheduler, addEvent]);
+  }, [simStatus, stopScheduler, startScheduler, generateLocalData, tier, roadChoice, addEvent]);
 
   const handleStopSimulation = useCallback(() => {
-    // ABSOLUTE STOP: Invalidate generation token & cancel rAF immediately
+    // ABSOLUTE STOP (PROBLEM 5 & 6): Invalidate generation tokens & cancel rAF immediately
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     stopScheduler();
     setSimStatus('STOPPED');
 
@@ -352,6 +365,7 @@ export default function App() {
     if (simStatus === 'RUNNING') return; // Debounce duplicate resume
 
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     const gen = simulationGenerationRef.current;
     stopScheduler();
 
@@ -364,6 +378,7 @@ export default function App() {
 
   const handleResetSimulation = useCallback(() => {
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     stopScheduler();
 
     currentIndexRef.current = 0;
@@ -374,6 +389,7 @@ export default function App() {
 
   const handleStepForward = useCallback(() => {
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     stopScheduler();
 
     setSimStatus('PAUSED');
@@ -385,6 +401,7 @@ export default function App() {
 
   const handleScrub = useCallback((idx) => {
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     stopScheduler();
 
     setSimStatus('PAUSED');
@@ -404,18 +421,24 @@ export default function App() {
     addEvent('DEMO', `Switched Route: ${newChoice.toUpperCase()}`);
   }, [loadTrajectory, tier, addEvent]);
 
-  const handleStartJudgeDemo = useCallback(async () => {
+  // INSTANT FIRST-CLICK JUDGE DEMO HANDLER (PROBLEM 2 & 3)
+  const handleStartJudgeDemo = useCallback(() => {
+    // 1. Invalidate previous simulation & demo tokens
     simulationGenerationRef.current += 1;
+    judgeDemoGenerationRef.current += 1;
     const gen = simulationGenerationRef.current;
+    const demoGen = judgeDemoGenerationRef.current;
     stopScheduler();
 
+    // 2. Instant Synchronous State Setup (T = 0 ms)
+    setDemoMode(true);
     setTier('hard');
     setRoadChoice('switch');
 
-    // Run trajectory generation synchronously or via fallback
-    await loadTrajectory('hard', 'switch');
-
-    if (simulationGenerationRef.current !== gen) return; // Stale check
+    // Ensure memory data is ready
+    if (pointsRef.current.length === 0) {
+      generateLocalData('hard', 'switch');
+    }
 
     currentIndexRef.current = 0;
     setCurrentIndex(0);
@@ -425,22 +448,38 @@ export default function App() {
     addEvent('JUDGE_DEMO_MODE_ENABLED', '🏆 START JUDGE DEMO MODE (15-STEP EXTENDED SEQUENCE)');
     addEvent('JUDGE_DEMO_MODE_ENABLED', '==================================================');
 
+    // 3. Immediately start rAF loop
     startScheduler(gen);
-  }, [stopScheduler, loadTrajectory, startScheduler, addEvent]);
 
-  // FIX BUG 1: JUDGE DEMO HEADER BUTTON HANDLER
+    // 4. Background non-blocking API refresh if backend connected
+    if (!isSimulatedBackendFailure && backendConnected) {
+      fetch(`${BACKEND_URL}/trajectory/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: 'hard', road_choice: 'switch' })
+      })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        // Non-blocking update only if tokens are still active
+        if (data && simulationGenerationRef.current === gen && judgeDemoGenerationRef.current === demoGen) {
+          setPoints(data.points || []);
+          setClassifications(data.classifications || []);
+          setAccuracySummary(data.accuracy_summary || null);
+        }
+      })
+      .catch(() => {});
+    }
+  }, [stopScheduler, startScheduler, generateLocalData, isSimulatedBackendFailure, backendConnected, addEvent]);
+
+  // INSTANT HEADER TOGGLE BUTTON HANDLER (PROBLEM 2)
   const handleToggleJudgeDemoHeader = useCallback(() => {
-    setDemoMode(prev => {
-      const nextMode = !prev;
-      if (nextMode) {
-        addEvent('JUDGE_DEMO_MODE_ENABLED', '🏆 JUDGE DEMO MODE ENABLED VIA HEADER');
-        handleStartJudgeDemo();
-      } else {
-        addEvent('JUDGE_DEMO_MODE_DISABLED', 'JUDGE DEMO MODE DISABLED');
-      }
-      return nextMode;
-    });
-  }, [addEvent, handleStartJudgeDemo]);
+    if (!demoMode) {
+      handleStartJudgeDemo();
+    } else {
+      setDemoMode(false);
+      addEvent('JUDGE_DEMO_MODE_DISABLED', 'JUDGE DEMO MODE DISABLED');
+    }
+  }, [demoMode, handleStartJudgeDemo, addEvent]);
 
   const handleInjectNoise = useCallback(async (eventType) => {
     if (isSimulatedBackendFailure || !backendConnected) {
