@@ -41,7 +41,8 @@ export default function Header({
       alignItems: 'center',
       justifyContent: 'space-between',
       boxSizing: 'border-box',
-      zIndex: 90,
+      zIndex: 100,
+      position: 'relative',
       userSelect: 'none'
     }}>
       {/* Brand Identity */}
@@ -72,7 +73,7 @@ export default function Header({
       </div>
 
       {/* Top Status Indicators & Presenter Mode Toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', pointerEvents: 'auto' }}>
         {/* Status Pills */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', fontWeight: 'bold' }}>
           <span style={{ padding: '4px 10px', borderRadius: '20px', background: modeBadge.bg, border: `1px solid ${modeBadge.border}`, color: modeBadge.color }}>
@@ -92,23 +93,28 @@ export default function Header({
           </span>
         </div>
 
-        {/* Presenter / Hackathon Demo Mode Toggle */}
+        {/* Presenter / Hackathon Demo Mode Toggle Button */}
         <button
           type="button"
-          onClick={onToggleDemoMode}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleDemoMode();
+          }}
           style={{
             background: demoMode ? 'linear-gradient(135deg, #a855f7 0%, #7e22ce 100%)' : '#1e293b',
             color: demoMode ? '#ffffff' : '#94a3b8',
             border: demoMode ? 'none' : '1px solid #334155',
             borderRadius: '20px',
-            padding: '5px 12px',
+            padding: '6px 14px',
             fontSize: '11px',
             fontWeight: '800',
             cursor: 'pointer',
-            boxShadow: demoMode ? '0 0 15px rgba(168, 85, 247, 0.4)' : 'none',
+            boxShadow: demoMode ? '0 0 15px rgba(168, 85, 247, 0.5)' : 'none',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px'
+            gap: '6px',
+            pointerEvents: 'auto',
+            zIndex: 101
           }}
         >
           <span>🏆</span>

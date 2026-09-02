@@ -58,12 +58,97 @@ export default function App() {
   const [backendConnected, setBackendConnected] = useState(false);
   const [events, setEvents] = useState([]);
 
-  const timerRef = useRef(null);
+  // DETERMINISTIC LIFECYCLE REFS
+  const simulationGenerationRef = useRef(0);
+  const animFrameRef = useRef(null);
+  const currentIndexRef = useRef(0);
+  const simSpeedRef = useRef(1);
+  const pointsRef = useRef([]);
+  const classificationsRef = useRef([]);
+
+  // Sync state to refs for high-frequency rAF loop access without stale closure bugs
+  useEffect(() => { pointsRef.current = points; }, [points]);
+  useEffect(() => { classificationsRef.current = classifications; }, [classifications]);
+  useEffect(() => { simSpeedRef.current = simSpeed; }, [simSpeed]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
 
   const addEvent = useCallback((type, message) => {
     const timeStr = new Date().toLocaleTimeString();
     setEvents(prev => [...prev.slice(-45), { time: timeStr, type, message }]);
   }, []);
+
+  // SINGLE AUTHORITATIVE RAF SCHEDULER CONTROLLER
+  const stopScheduler = useCallback(() => {
+    if (animFrameRef.current !== null) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+  }, []);
+
+  const startScheduler = useCallback((gen) => {
+    stopScheduler();
+    let lastTime = performance.now();
+
+    const loop = (timestamp) => {
+      // Generation Token Guard — Invalidates stale callbacks instantly
+      if (simulationGenerationRef.current !== gen) {
+        return;
+      }
+
+      const intervalMs = Math.max(50, Math.floor(250 / simSpeedRef.current));
+      const elapsed = timestamp - lastTime;
+
+      if (elapsed >= intervalMs) {
+        lastTime = timestamp;
+        const pts = pointsRef.current;
+        const maxIdx = pts.length - 1;
+
+        if (maxIdx > 0) {
+          if (currentIndexRef.current >= maxIdx) {
+            simulationGenerationRef.current += 1;
+            setSimStatus('COMPLETED');
+            addEvent('SUCCESS', 'Simulation playback completed.');
+            stopScheduler();
+            return;
+          }
+
+          const nextIdx = currentIndexRef.current + 1;
+          currentIndexRef.current = nextIdx;
+          setCurrentIndex(nextIdx);
+
+          // Milestone event logging
+          if (nextIdx === 10) addEvent('GPS', '1. Clean GNSS fix received — jitter < 2.5m.');
+          else if (nextIdx === 20) addEvent('NOISE', '2. GNSS noise level increasing (12m jitter).');
+          else if (nextIdx === 25) {
+            addEvent('NOISE', '3. 15m Multipath Bias! Nearest Road baseline fails & flips to Service Road.');
+            addEvent('SUCCESS', '4. Random Forest & HMM Viterbi correct map-match to Highway.');
+          } else if (nextIdx === 40) addEvent('DEMO', '5. Anomaly Detector: Verifying velocity & kinematic bounds.');
+          else if (nextIdx === 50) {
+            addEvent('GNSS_OUTAGE_STARTED', '6. CRITICAL: 35-Second GNSS Outage Triggered! GNSS = LOST.');
+            addEvent('EDGE_INFERENCE', '7. IMU + EKF Kalman Filter Active: Propagating via accel_x, accel_y & yaw_rate.');
+          } else if (nextIdx === 70) addEvent('OUTAGE', '8. Confidence decaying (68%), EKF uncertainty sphere expanding.');
+          else if (nextIdx === 86) {
+            addEvent('GNSS_RECOVERED', '9. GNSS Signal Restored! EKF measurement update executed.');
+            addEvent('SUCCESS', '10. ✓ CONFIDENCE RECOVERED to 95%.');
+          }
+        }
+      }
+
+      if (simulationGenerationRef.current === gen) {
+        animFrameRef.current = requestAnimationFrame(loop);
+      }
+    };
+
+    animFrameRef.current = requestAnimationFrame(loop);
+  }, [stopScheduler, addEvent]);
+
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      simulationGenerationRef.current += 1;
+      stopScheduler();
+    };
+  }, [stopScheduler]);
 
   // Local Edge Inference Execution
   const runEdgeInference = useCallback((pts, hw, srv) => {
@@ -178,6 +263,8 @@ export default function App() {
   }, [addEvent]);
 
   const loadTrajectory = useCallback(async (selectedTier = tier, selectedChoice = roadChoice) => {
+    const currentGen = simulationGenerationRef.current;
+    
     if (isSimulatedBackendFailure) {
       addEvent('EDGE_MODE_ACTIVATED', 'Simulated backend failure active; running Local Edge Inference');
       generateLocalData(selectedTier, selectedChoice);
@@ -190,6 +277,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tier: selectedTier, road_choice: selectedChoice })
       });
+      
+      // Token Guard: Stale request check
+      if (currentGen !== simulationGenerationRef.current) return;
+
       if (res.ok) {
         const data = await res.json();
         setPoints(data.points || []);
@@ -199,6 +290,7 @@ export default function App() {
         setBackendConnected(true);
       } else throw new Error('Non-200 trajectory');
     } catch (err) {
+      if (currentGen !== simulationGenerationRef.current) return;
       setBackendConnected(false);
       addEvent('EDGE_MODE_ACTIVATED', 'Backend HTTP failure detected; executing Local Edge Inference');
       generateLocalData(selectedTier, selectedChoice);
@@ -211,126 +303,148 @@ export default function App() {
   }, [fetchRoads, loadTrajectory]);
 
   // Feature 9: Failsafe Simulation Action Handlers
-  const handleSimulateBackendFailure = () => {
+  const handleSimulateBackendFailure = useCallback(() => {
     setIsSimulatedBackendFailure(true);
     setBackendConnected(false);
     addEvent('BACKEND_DISCONNECTED', '⚡ SIMULATED BACKEND DISCONNECTION TRIGGERED');
     addEvent('EDGE_MODE_ACTIVATED', 'Local Edge Inference Engine activated seamlessly');
     
-    // Switch to local edge inference on current active trajectory & step
-    runEdgeInference(points, highwayCoords, serviceCoords);
-  };
+    runEdgeInference(pointsRef.current, highwayCoords, serviceCoords);
+  }, [highwayCoords, serviceCoords, runEdgeInference, addEvent]);
 
-  const handleRestoreBackend = async () => {
+  const handleRestoreBackend = useCallback(async () => {
     setIsSimulatedBackendFailure(false);
     addEvent('BACKEND_RECONNECTED', 'Restoring FastAPI backend connection...');
     await fetchRoads();
     await loadTrajectory(tier, roadChoice);
     addEvent('SYSTEM', 'Switched to LIVE BACKEND inference mode');
-  };
+  }, [fetchRoads, loadTrajectory, tier, roadChoice, addEvent]);
 
-  // Simulation Lifecycle Timer Loop
-  useEffect(() => {
-    if (simStatus === 'RUNNING') {
-      const intervalMs = Math.max(50, Math.floor(250 / simSpeed));
-      timerRef.current = setInterval(() => {
-        setCurrentIndex(prev => {
-          if (prev >= points.length - 1) {
-            setSimStatus('COMPLETED');
-            addEvent('SUCCESS', 'Simulation playback completed.');
-            return prev;
-          }
-          const nextIdx = prev + 1;
-          const cls = classifications[nextIdx];
-          const confPct = Math.round((cls?.confidence || 0.95) * 100);
+  // DETERMINISTIC LIFECYCLE CONTROLS (PART 2, 3, 4, 5)
+  const handleStartSimulation = useCallback(() => {
+    if (simStatus === 'RUNNING') return; // Debounce duplicate start
 
-          if (confPct < confidenceThreshold) {
-            addEvent('OUTAGE', `⚠ LOW MAP-MATCH CONFIDENCE: ${confPct}% < ${confidenceThreshold}% threshold! Position verification recommended.`);
-          }
+    simulationGenerationRef.current += 1;
+    const gen = simulationGenerationRef.current;
+    stopScheduler();
 
-          if (nextIdx === 10) addEvent('GPS', '1. Clean GNSS fix received — jitter < 2.5m.');
-          else if (nextIdx === 20) addEvent('NOISE', '2. GNSS noise level increasing (12m jitter).');
-          else if (nextIdx === 25) {
-            addEvent('NOISE', '3. 15m Multipath Bias! Nearest Road baseline fails & flips to Service Road.');
-            addEvent('SUCCESS', '4. Random Forest & HMM Viterbi correct map-match to Highway.');
-          } else if (nextIdx === 40) addEvent('DEMO', '5. Anomaly Detector: Verifying velocity & kinematic bounds.');
-          else if (nextIdx === 50) {
-            addEvent('GNSS_OUTAGE_STARTED', '6. CRITICAL: 35-Second GNSS Outage Triggered! GNSS = LOST.');
-            addEvent('EDGE_INFERENCE', '7. IMU + EKF Kalman Filter Active: Propagating via accel_x, accel_y & yaw_rate.');
-          } else if (nextIdx === 70) addEvent('OUTAGE', '8. Confidence decaying (68%), EKF uncertainty sphere expanding.');
-          else if (nextIdx === 86) {
-            addEvent('GNSS_RECOVERED', '9. GNSS Signal Restored! EKF measurement update executed.');
-            addEvent('SUCCESS', '10. ✓ CONFIDENCE RECOVERED to 95%.');
-          }
-
-          return nextIdx;
-        });
-      }, intervalMs);
-    } else if (timerRef.current) clearInterval(timerRef.current);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [simStatus, points, classifications, confidenceThreshold, simSpeed, addEvent]);
-
-  // Lifecycle Control Handlers (PRESERVES STATE)
-  const handleStartSimulation = () => {
+    currentIndexRef.current = 0;
     setCurrentIndex(0);
     setSimStatus('RUNNING');
-    addEvent('SUCCESS', 'START LIVE SIMULATION: Autonomous vehicle moving through Chennai NH-48 corridor.');
-  };
 
-  const handleStopSimulation = () => {
+    addEvent('SIMULATION_STARTED', 'START LIVE SIMULATION: Autonomous vehicle moving through Chennai NH-48 corridor.');
+    addEvent('SIMULATION_LOOP_CREATED', `Simulation scheduler #${gen} created via rAF.`);
+
+    startScheduler(gen);
+  }, [simStatus, stopScheduler, startScheduler, addEvent]);
+
+  const handleStopSimulation = useCallback(() => {
+    // ABSOLUTE STOP: Invalidate generation token & cancel rAF immediately
+    simulationGenerationRef.current += 1;
+    stopScheduler();
     setSimStatus('STOPPED');
-    addEvent('OUTAGE', `■ SIMULATION STOPPED at step ${currentIndex}. State & telemetry preserved.`);
-  };
 
-  const handleResumeSimulation = () => {
+    addEvent('SIMULATION_STOPPED', `■ SIMULATION STOPPED at step ${currentIndexRef.current}. State & telemetry preserved.`);
+    addEvent('SIMULATION_LOOP_CANCELLED', 'Active simulation loop cancelled.');
+  }, [stopScheduler, addEvent]);
+
+  const handleResumeSimulation = useCallback(() => {
+    if (simStatus === 'RUNNING') return; // Debounce duplicate resume
+
+    simulationGenerationRef.current += 1;
+    const gen = simulationGenerationRef.current;
+    stopScheduler();
+
     setSimStatus('RUNNING');
-    addEvent('SUCCESS', `▶ SIMULATION RESUMED from step ${currentIndex}.`);
-  };
+    addEvent('SIMULATION_RESUMED', `▶ SIMULATION RESUMED from step ${currentIndexRef.current}.`);
+    addEvent('SIMULATION_LOOP_CREATED', `Simulation scheduler #${gen} created via rAF.`);
 
-  const handleResetSimulation = () => {
-    setSimStatus('IDLE');
+    startScheduler(gen);
+  }, [simStatus, stopScheduler, startScheduler, addEvent]);
+
+  const handleResetSimulation = useCallback(() => {
+    simulationGenerationRef.current += 1;
+    stopScheduler();
+
+    currentIndexRef.current = 0;
     setCurrentIndex(0);
+    setSimStatus('IDLE');
     addEvent('DEMO', 'Simulation reset to initial state (step 0).');
-  };
+  }, [stopScheduler, addEvent]);
 
-  const handleStepForward = () => {
+  const handleStepForward = useCallback(() => {
+    simulationGenerationRef.current += 1;
+    stopScheduler();
+
     setSimStatus('PAUSED');
-    setCurrentIndex(prev => Math.min(prev + 1, points.length - 1));
-  };
+    const maxIdx = Math.max(0, pointsRef.current.length - 1);
+    const nextIdx = Math.min(currentIndexRef.current + 1, maxIdx);
+    currentIndexRef.current = nextIdx;
+    setCurrentIndex(nextIdx);
+  }, [stopScheduler]);
 
-  const handleScrub = (idx) => {
-    if (simStatus === 'RUNNING') setSimStatus('PAUSED');
+  const handleScrub = useCallback((idx) => {
+    simulationGenerationRef.current += 1;
+    stopScheduler();
+
+    setSimStatus('PAUSED');
+    currentIndexRef.current = idx;
     setCurrentIndex(idx);
-  };
+  }, [stopScheduler]);
 
-  const handleChangeTier = (newTier) => {
+  const handleChangeTier = useCallback((newTier) => {
     setTier(newTier);
     loadTrajectory(newTier, roadChoice);
     addEvent('DEMO', `Switched Demo Scenario: ${newTier.toUpperCase()}`);
-  };
+  }, [loadTrajectory, roadChoice, addEvent]);
 
-  const handleChangeRoadChoice = (newChoice) => {
+  const handleChangeRoadChoice = useCallback((newChoice) => {
     setRoadChoice(newChoice);
     loadTrajectory(tier, newChoice);
     addEvent('DEMO', `Switched Route: ${newChoice.toUpperCase()}`);
-  };
+  }, [loadTrajectory, tier, addEvent]);
 
-  const handleStartJudgeDemo = async () => {
-    setSimStatus('IDLE');
+  const handleStartJudgeDemo = useCallback(async () => {
+    simulationGenerationRef.current += 1;
+    const gen = simulationGenerationRef.current;
+    stopScheduler();
+
     setTier('hard');
     setRoadChoice('switch');
+
+    // Run trajectory generation synchronously or via fallback
     await loadTrajectory('hard', 'switch');
+
+    if (simulationGenerationRef.current !== gen) return; // Stale check
+
+    currentIndexRef.current = 0;
     setCurrentIndex(0);
     setSimStatus('RUNNING');
 
-    addEvent('DEMO', '==================================================');
-    addEvent('DEMO', 'START JUDGE DEMO (15-STEP EXTENDED SEQUENCE)');
-    addEvent('DEMO', '==================================================');
-  };
+    addEvent('JUDGE_DEMO_MODE_ENABLED', '==================================================');
+    addEvent('JUDGE_DEMO_MODE_ENABLED', '🏆 START JUDGE DEMO MODE (15-STEP EXTENDED SEQUENCE)');
+    addEvent('JUDGE_DEMO_MODE_ENABLED', '==================================================');
 
-  const handleInjectNoise = async (eventType) => {
+    startScheduler(gen);
+  }, [stopScheduler, loadTrajectory, startScheduler, addEvent]);
+
+  // FIX BUG 1: JUDGE DEMO HEADER BUTTON HANDLER
+  const handleToggleJudgeDemoHeader = useCallback(() => {
+    setDemoMode(prev => {
+      const nextMode = !prev;
+      if (nextMode) {
+        addEvent('JUDGE_DEMO_MODE_ENABLED', '🏆 JUDGE DEMO MODE ENABLED VIA HEADER');
+        handleStartJudgeDemo();
+      } else {
+        addEvent('JUDGE_DEMO_MODE_DISABLED', 'JUDGE DEMO MODE DISABLED');
+      }
+      return nextMode;
+    });
+  }, [addEvent, handleStartJudgeDemo]);
+
+  const handleInjectNoise = useCallback(async (eventType) => {
     if (isSimulatedBackendFailure || !backendConnected) {
-      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndex}`);
+      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndexRef.current}`);
       return;
     }
 
@@ -339,9 +453,9 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          points: points,
+          points: pointsRef.current,
           event_type: eventType,
-          start_index: Math.max(10, currentIndex),
+          start_index: Math.max(10, currentIndexRef.current),
           duration: 35
         })
       });
@@ -350,12 +464,12 @@ export default function App() {
         setPoints(data.points || []);
         setClassifications(data.classifications || []);
         setAccuracySummary(data.accuracy_summary || null);
-        addEvent('OUTAGE', `Injected event (${eventType.toUpperCase()}) applied for 35s at step ${currentIndex}`);
+        addEvent('OUTAGE', `Injected event (${eventType.toUpperCase()}) applied for 35s at step ${currentIndexRef.current}`);
       } else throw new Error('Noise injection API failed');
     } catch (err) {
-      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndex}`);
+      addEvent('EDGE_INFERENCE', `Injected event (${eventType.toUpperCase()}) computed locally via Edge Engine at step ${currentIndexRef.current}`);
     }
-  };
+  }, [isSimulatedBackendFailure, backendConnected, addEvent]);
 
   const currentPoint = points[currentIndex];
   const currentClassification = classifications[currentIndex];
@@ -377,7 +491,7 @@ export default function App() {
         inferenceMode={inferenceMode}
         isOutage={currentClassification?.is_outage}
         demoMode={demoMode}
-        onToggleDemoMode={() => setDemoMode(d => !d)}
+        onToggleDemoMode={handleToggleJudgeDemoHeader}
       />
 
       {/* Main Body Split: Left Sidebar + Center Workspace */}
