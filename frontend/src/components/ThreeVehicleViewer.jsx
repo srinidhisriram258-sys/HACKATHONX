@@ -9,6 +9,9 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
   const uncertaintySphereRef = useRef(null);
   const chassisMatRef = useRef(null);
   const wheelsRef = useRef([]);
+  const serviceWarningRingRef = useRef(null);
+  const serviceBeaconRef = useRef(null);
+  const isServiceRoadRef = useRef(false);
 
   // Initialize Three.js scene once to avoid unmounting/remounting flicker
   useEffect(() => {
@@ -33,7 +36,7 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(renderer.domElement);
 
     // Ambient & Directional Lights
@@ -141,6 +144,37 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
     uncertaintySphereRef.current = uncertaintySphere;
     vehicleGroup.add(uncertaintySphere);
 
+    // 3D SERVICE ROAD WARNING ALERT RING (Orange Halo around vehicle)
+    const warningRingGeo = new THREE.TorusGeometry(2.0, 0.08, 16, 32);
+    const warningRingMat = new THREE.MeshStandardMaterial({
+      color: 0xf97316,
+      emissive: 0xea580c,
+      emissiveIntensity: 1.2,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.9
+    });
+    const warningRing = new THREE.Mesh(warningRingGeo, warningRingMat);
+    warningRing.rotation.x = Math.PI / 2;
+    warningRing.position.set(0, 0.1, 0);
+    warningRing.visible = false;
+    serviceWarningRingRef.current = warningRing;
+    vehicleGroup.add(warningRing);
+
+    // 3D SERVICE ROAD FLOATING WARNING BEACON (Above vehicle roof)
+    const beaconGeo = new THREE.OctahedronGeometry(0.35);
+    const beaconMat = new THREE.MeshStandardMaterial({
+      color: 0xf97316,
+      emissive: 0xff6600,
+      emissiveIntensity: 1.8,
+      roughness: 0.1
+    });
+    const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+    beacon.position.set(0, 2.2, 0);
+    beacon.visible = false;
+    serviceBeaconRef.current = beacon;
+    vehicleGroup.add(beacon);
+
     // 4 Wheels
     const wheelGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.22, 20);
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.9 });
@@ -170,12 +204,13 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
 
     // Animation loop
     let animId;
-    const clock = new THREE.Clock();
+    const timer = new THREE.Timer();
 
-    const animate = () => {
+    const animate = (timestamp) => {
       animId = requestAnimationFrame(animate);
-      const delta = clock.getDelta();
-      const time = clock.getElapsedTime();
+      timer.update(timestamp);
+      const delta = timer.getDelta();
+      const time = timer.getElapsed();
 
       // Rotate LiDAR Sensor beam continuously
       if (lidarBeamRef.current) {
@@ -193,6 +228,25 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
       // Gentle floating/bouncing suspension dynamics
       if (vehicleRef.current) {
         vehicleRef.current.position.y = Math.sin(time * 6) * 0.015;
+      }
+
+      // 3D SERVICE ROAD WARNING ALERT ANIMATION
+      const isService = isServiceRoadRef.current;
+      if (serviceWarningRingRef.current) {
+        serviceWarningRingRef.current.visible = isService;
+        if (isService) {
+          serviceWarningRingRef.current.rotation.z += 1.8 * delta;
+          const pulse = 1.0 + 0.12 * Math.sin(time * 5.0);
+          serviceWarningRingRef.current.scale.set(pulse, pulse, pulse);
+        }
+      }
+
+      if (serviceBeaconRef.current) {
+        serviceBeaconRef.current.visible = isService;
+        if (isService) {
+          serviceBeaconRef.current.rotation.y += 2.5 * delta;
+          serviceBeaconRef.current.position.y = 2.2 + 0.1 * Math.sin(time * 4.0);
+        }
       }
 
       renderer.render(scene, camera);
@@ -221,19 +275,22 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
     };
   }, []); // Run once on mount
 
-  // Smoothly update vehicle state, position, and 3D uncertainty sphere without re-mounting
+  // Smoothly update vehicle state, position, 3D uncertainty sphere, and Service Road warning without re-mounting
   useEffect(() => {
     if (!classification) return;
 
     const isOutage = classification.is_outage;
-    const road = classification.classified_road;
+    const road = classification.classified_road || classification.predictions?.fusion_engine || 'highway';
+    const isService = road.includes('service');
     const uncertRadius = classification.uncertainty_radius_m || 5.0;
+
+    isServiceRoadRef.current = isService;
 
     // Update chassis color
     if (chassisMatRef.current) {
       if (isOutage) {
         chassisMatRef.current.color.setHex(0xef4444); // Red during 35s GNSS outage
-      } else if (road === 'highway') {
+      } else if (!isService) {
         chassisMatRef.current.color.setHex(0x2563eb); // Blue for Highway
       } else {
         chassisMatRef.current.color.setHex(0xf97316); // Orange for Service Road
@@ -242,7 +299,7 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
 
     // Update 3D vehicle position on highway vs service road 3D surface
     if (vehicleRef.current) {
-      const zPos = (road === 'highway') ? 0 : -4.5;
+      const zPos = (!isService) ? 0 : -4.5;
       vehicleRef.current.position.z = zPos;
       // Vehicle heading angle in 3D
       vehicleRef.current.rotation.y = THREE.MathUtils.degToRad((heading || 45) - 45);
@@ -252,8 +309,8 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
     if (uncertaintySphereRef.current) {
       const scale = Math.min(3.5, Math.max(0.8, uncertRadius / 6.0));
       uncertaintySphereRef.current.scale.set(scale, scale, scale);
-      uncertaintySphereRef.current.material.color.setHex(isOutage ? 0xef4444 : 0x38bdf8);
-      uncertaintySphereRef.current.material.opacity = isOutage ? 0.45 : 0.2;
+      uncertaintySphereRef.current.material.color.setHex(isOutage ? 0xef4444 : (isService ? 0xf97316 : 0x38bdf8));
+      uncertaintySphereRef.current.material.opacity = isOutage ? 0.45 : 0.25;
     }
   }, [classification, heading]);
 
@@ -288,6 +345,33 @@ export default function ThreeVehicleViewer({ currentPoint, classification, speed
         <div><span style={{ color: '#a855f7' }}>3D UNCERTAINTY:</span> {classification?.uncertainty_radius_m || 5.0}m</div>
         <div><span style={{ color: '#10b981' }}>3D HEADING:</span> {heading}°</div>
       </div>
+
+      {/* 3D Service Road Visual Alert Banner inside 3D View */}
+      {isServiceRoadRef.current && (
+        <div style={{
+          position: 'absolute',
+          bottom: '12px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(249, 115, 22, 0.9)',
+          color: '#ffffff',
+          border: '1.5px solid #ff6600',
+          backdropFilter: 'blur(10px)',
+          padding: '6px 16px',
+          borderRadius: '20px',
+          fontSize: '12px',
+          fontWeight: '900',
+          letterSpacing: '0.05em',
+          boxShadow: '0 0 20px rgba(249, 115, 22, 0.6)',
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <span style={{ fontSize: '14px' }}>⚠️</span>
+          <span>SERVICE ROAD CLASSIFIED — 12.4M LATERAL SEPARATION</span>
+        </div>
+      )}
     </div>
   );
 }
